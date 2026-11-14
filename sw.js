@@ -1,6 +1,6 @@
 // Keeps the app working with bad or no signal: serves the last copy when offline.
 // (The caption engine caches its own model files.)
-const CACHE = 'reaction-studio-v2';
+const CACHE = 'reaction-studio-v3';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'store.js', 'captions.js', 'captions-worker.js',
   'manifest.webmanifest', 'icon.svg', 'icon-180.png', 'icon-512.png'];
 
@@ -17,7 +17,8 @@ self.addEventListener('fetch', e => {
   const url = new URL(req.url);
   if (url.origin === location.origin) {
     // app files: try the network first (so updates show up), fall back to the saved copy
-    e.respondWith(fetch(req).then(res => {
+    // no-cache = always ask GitHub if there's a newer copy (so updates show up straight away)
+    e.respondWith(fetch(req, { cache: 'no-cache' }).then(res => {
       if (res.ok) { const copy = res.clone(); caches.open(CACHE).then(c => c.put(req, copy)); }
       return res;
     }).catch(() => caches.match(req, { ignoreSearch: true })));

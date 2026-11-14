@@ -1900,7 +1900,7 @@ function renderSetup(body) {
     'yt-dlp --no-playlist --force-overwrites -f "b[ext=mp4][vcodec^=avc]/bv*[vcodec^=avc][height<=1920]+ba[ext=m4a]/b[ext=mp4]/b" --merge-output-format mp4 -o reaction-video.mp4 "LINK"',
     'open "shortcuts://run-shortcut?name=ReactionStudioSave"',
   ].join('\n');
-  const back = 'x-safari-' + appURL + '?got=1';
+  const back = appURL + '?got=1';
   const copy = (text, label = 'Copy') => `<pre>${esc(text)}</pre><button class="copy" data-copy="${esc(text)}">${label}</button>`;
   body.innerHTML = `<div class="setup">
     <p class="sheet-tip">Do this once. After that, in Instagram, TikTok or YouTube tap <b>Share → Reaction Studio</b> and the video lands here.
@@ -1934,8 +1934,9 @@ function renderSetup(body) {
       <li>Search Actions → <b>Get File from Folder</b>. Tap <b>Folder</b> → On My iPhone → <b>a-Shell</b> → Open. Tap <b>File Path</b> and type:
         ${copy('reaction-video.mp4')}</li>
       <li>Search Actions → <b>Save to Photo Album</b> (leave it as it is).</li>
-      <li>Search Actions → <b>Open URLs</b>. Tap <b>URL</b> and paste this (the <i>x-safari-</i> part makes it open in Safari even if Chrome is your default browser):
-        ${copy(back)}</li>
+      <li>Search Actions → <b>Open URLs</b>. Tap <b>URL</b> and paste this:
+        ${copy(back)}
+        It opens in your <b>default browser</b>. Use the app in that same browser (Safari or Chrome), because each browser keeps its own copy of your clips.</li>
       <li>Leave "Show in Share Sheet" <b>off</b> for this one. Tap <b>‹</b> to save.</li>
     </ol>
 
