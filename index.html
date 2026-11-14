@@ -148,20 +148,34 @@
           <svg class="i-play" viewBox="0 0 24 24"><path d="M7 5l12 7-12 7z"/></svg>
           <svg class="i-pause" viewBox="0 0 24 24"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg>
         </button>
-        <span id="tlTime">0:00 / 0:00</span>
+        <button id="undoEd" class="mini-play" aria-label="Undo" disabled>
+          <svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/></svg>
+        </button>
+        <button id="redoEd" class="mini-play" aria-label="Redo" disabled>
+          <svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 000 12h3"/></svg>
+        </button>
         <div class="tl-chips">
           <button id="ovAddBtn" class="chip">+ Overlay</button>
           <button id="captionsBtn" class="chip">Captions</button>
           <button id="autoCutBtn" class="chip cut-chip" aria-pressed="true">Cut silence</button>
         </div>
       </div>
+      <div class="scrub tl-scrub">
+        <span id="tlTime">0:00</span>
+        <input id="tlScrub" type="range" min="0" max="1000" value="0" step="1" aria-label="Move through the video">
+        <span id="tlTotal">0:00</span>
+        <button id="zoomOut" class="zoom-btn" aria-label="Zoom timeline out">−</button>
+        <button id="zoomIn" class="zoom-btn" aria-label="Zoom timeline in">+</button>
+      </div>
       <div id="timeline" class="timeline">
-        <div id="tlClips" class="tl-clips"></div>
-        <div id="ovLane" class="ov-lane" hidden></div>
-        <div id="tlPlayhead" class="tl-playhead"></div>
+        <div id="tlInner" class="tl-inner">
+          <div id="tlClips" class="tl-clips"></div>
+          <div id="ovLane" class="ov-lane" hidden></div>
+          <div id="tlPlayhead" class="tl-playhead"></div>
+        </div>
       </div>
       <input id="ovInput" type="file" accept="image/*,video/*" hidden>
-      <p id="tlTip" class="trim-tip">Tap a clip to trim it · hold &amp; drag to move it</p>
+      <p id="tlTip" class="trim-tip">Tap a clip to trim it · hold &amp; drag to move it · pinch to zoom</p>
 
       <div id="clipPanel" class="clip-panel" hidden>
         <div class="cp-head">

@@ -34,6 +34,7 @@ const Store = (() => {
 
   return {
     async get(key) { const d = await db(); return reqResult(d.transaction('kv').objectStore('kv').get(key)); },
+    async keys() { const d = await db(); return reqResult(d.transaction('kv').objectStore('kv').getAllKeys()); },
     set(key, value) { return tx('kv', 'readwrite', s => { s.put(value, key); }); },
     del(key) { return tx('kv', 'readwrite', s => { s.delete(key); }); },
     async listVideos() {

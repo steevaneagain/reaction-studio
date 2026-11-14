@@ -487,3 +487,18 @@ input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border-radius: 
 .cp-head { flex-wrap: wrap; row-gap: 8px; }
 .cp-head > b { width: 100%; }
 .cp-acts { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
+/* editor: undo/redo, scrub bar, zoomable timeline */
+.mini-play svg { fill: none; stroke: #fff; stroke-width: 2.2; }
+.mini-play .i-play, .mini-play .i-pause { fill: #fff; stroke: none; }
+.mini-play:disabled { opacity: .3; }
+.tl-scrub { margin: 0 0 6px; }
+.tl-scrub span { width: 34px; }
+.zoom-btn { border: 0; width: 30px; height: 30px; border-radius: 8px; background: var(--panel-2); font-size: 18px; font-weight: 700; line-height: 1; padding: 0; flex: none; }
+.timeline { overflow-x: auto; overflow-y: hidden; scrollbar-width: none; padding: 4px 0; }
+.timeline::-webkit-scrollbar { display: none; }
+.tl-inner { position: relative; width: 100%; min-width: 100%; }
+/* keep captions/overlays above the preview video on iPhone */
+.preview-box video { z-index: 0; }
+.preview-box canvas { z-index: 1; }
+.preview-box .review-play { z-index: 2; }
+.setup pre { white-space: pre-wrap; }

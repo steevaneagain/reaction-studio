@@ -19,7 +19,7 @@ for (const id of [
   'restartBtn', 'seek', 'curTime', 'durTime', 'vol', 'volPct',
   'undoBtn', 'playBtn', 'recBtn', 'clipsBtn', 'lastClipThumb', 'clipCount', 'nextBtn',
   'reviewBack', 'totalLen', 'saveFinal', 'previewBox', 'reviewVideo', 'capCanvas', 'reviewPlay',
-  'playAll', 'tlTime', 'captionsBtn', 'autoCutBtn', 'timeline', 'tlClips', 'tlPlayhead', 'tlTip',
+  'playAll', 'tlTime', 'tlTotal', 'tlScrub', 'tlInner', 'zoomIn', 'zoomOut', 'undoEd', 'redoEd', 'captionsBtn', 'autoCutBtn', 'timeline', 'tlClips', 'tlPlayhead', 'tlTip',
   'clipPanel', 'cpTitle', 'cpLeft', 'cpRight', 'cpRetake', 'cpDelete', 'cpDone',
   'trimTrack', 'shadeL', 'shadeR', 'trimSel', 'playhead', 'tIn', 'tLen', 'tOut',
   'sheetBackdrop', 'sheet', 'sheetTitle', 'closeSheet', 'sheetBody',
@@ -37,7 +37,7 @@ const SIZES = [{ k: 'S', w: 0.30 }, { k: 'M', w: 0.38 }, { k: 'L', w: 0.50 }];
 const state = {
   layout: load('layout', 'bubble'),
   swap: load('swap', false),
-  size: load('size', 1),
+  bubbleW: load('bubbleW', 0.38), // bubble width (0..1 of the frame), pinch to change smoothly
   fit: load('fit', 'contain'),
   bubble: load('bubble', { x: 0.76, y: 0.2 }),
   vid: load('vid', { scale: 1, x: 0.5, y: 0.5, edge: 'none' }), // the reacted video: size, position, edges
@@ -110,18 +110,22 @@ function saveSession(now = false) {
   saveTimer = setTimeout(doSave, 600);
 }
 async function clearSession() {
-  const s = await Store.get('session').catch(() => null);
-  for (const c of (s && s.clips) || []) await Store.del('clip:' + c.id).catch(() => {});
-  for (const c of state.clips) await Store.del('clip:' + c.id).catch(() => {});
-  for (const o of [...((s && s.overlays) || []), ...state.overlays]) await Store.del('ov:' + o.id).catch(() => {});
+  // every stored clip and overlay goes, including ones kept around for Undo
+  for (const k of await Store.keys().catch(() => [])) if (/^(clip|ov):/.test(k)) await Store.del(k).catch(() => {});
   await Store.del('session').catch(() => {});
   await Store.del('source').catch(() => {});
 }
 
+// Clips/overlays deleted in an earlier visit were kept only for Undo: clear them out on start.
+async function tidyStorage(s) {
+  const keep = new Set([...((s && s.clips) || []).map(c => 'clip:' + c.id), ...((s && s.overlays) || []).map(o => 'ov:' + o.id)]);
+  for (const k of await Store.keys().catch(() => [])) if (/^(clip|ov):/.test(k) && !keep.has(k)) await Store.del(k).catch(() => {});
+}
 async function checkResume() {
   try {
     const s = await Store.get('session');
     const src = await Store.get('source');
+    if (!checkResume.tidied) { checkResume.tidied = true; tidyStorage(s); }
     if (s && src && s.clips && s.clips.length) {
       el.resumeBtn.hidden = false;
       el.resumeInfo.textContent = `${s.clips.length} clip${s.clips.length > 1 ? 's' : ''} · ${new Date(s.updated).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}`;
@@ -197,7 +201,7 @@ function connectMic() {
 }
 
 // Where you start/stop talking in each clip (mic only), for "Cut silence".
-const SPEECH_RMS = 0.03;
+const SPEECH_RMS = 0.015; // fairly quiet talking still counts
 let loudFrames = 0;
 function listenForSpeech(t) {
   const c = state.curClip;
@@ -208,7 +212,7 @@ function listenForSpeech(t) {
   for (let i = 0; i < micBuf.length; i++) sum += micBuf[i] * micBuf[i];
   const rms = Math.sqrt(sum / micBuf.length);
   loudFrames = rms > SPEECH_RMS ? loudFrames + 1 : 0;
-  if (loudFrames >= 3) {
+  if (loudFrames >= 2) {
     if (c.speechStart == null) c.speechStart = Math.max(0, t - 0.1);
     c.speechEnd = t;
   }
@@ -343,7 +347,7 @@ function roundRectPath(x, y, w, h, r) {
   g.closePath();
 }
 function bubbleRect() {
-  const bw = W * SIZES[state.size].w;
+  const bw = W * state.bubbleW;
   const bh = bw * (state.swap ? 16 / 9 : 4 / 3);
   const cx = clamp(state.bubble.x * W, bw / 2 + 24, W - bw / 2 - 24);
   const cy = clamp(state.bubble.y * H, bh / 2 + 24, H - bh / 2 - 24);
@@ -483,8 +487,10 @@ function tick(now) {
   const dt = Math.min(0.1, (now - lastFrame) / 1000);
   lastFrame = now;
   if (el.studio.classList.contains('active')) {
-    const target = srcDone() ? 1 : 0;
-    if (state.goneT !== target) state.goneT = clamp(state.goneT + Math.sign(target - state.goneT) * dt / 0.6, 0, 1);
+    watchPictureEnd(now);
+    const nearEnd = !el.src.paused && el.src.duration > 0 && el.src.currentTime >= srcOut() - 0.2;
+    const target = srcDone() || nearEnd ? 1 : 0;
+    if (state.goneT !== target) state.goneT = clamp(state.goneT + Math.sign(target - state.goneT) * dt / 0.35, 0, 1);
     draw();
     if (!seeking) updateTimes();
     if (state.recording) {
@@ -509,7 +515,31 @@ let seeking = false;
 // The reacted video can be trimmed: it only plays between srcIn and srcOut.
 const srcIn = () => state.srcIn || 0;
 const srcOut = () => (state.srcOut != null ? Math.min(state.srcOut, el.src.duration || Infinity) : (el.src.duration || 0));
-const srcDone = () => el.src.ended || (el.src.duration > 0 && el.src.currentTime >= srcOut() - 0.04);
+const srcDone = () => el.src.ended || (el.src.duration > 0 && el.src.currentTime >= srcOut() - 0.04) ||
+  (state.picEndAt != null && el.src.currentTime >= state.picEndAt - 0.05);
+
+// Downloaded videos often have sound that runs a few seconds past the picture.
+// Watch for new picture frames: when they stop while playing, the video is over.
+let lastPicFrame = 0;
+function onSrcFrame(now, meta) {
+  lastPicFrame = performance.now();
+  if (state.picEndAt != null && meta && meta.mediaTime < state.picEndAt - 0.1) state.picEndAt = null; // seeked back
+  el.src.requestVideoFrameCallback(onSrcFrame);
+}
+if ('requestVideoFrameCallback' in HTMLVideoElement.prototype) el.src.requestVideoFrameCallback(onSrcFrame);
+let lastSrcT = -1, lastSrcMove = 0;
+function watchPictureEnd(now) {
+  const v = el.src;
+  if (v.paused || v.seeking || v.readyState < 2) { lastPicFrame = now; lastSrcMove = now; return; }
+  if (v.currentTime !== lastSrcT) { lastSrcT = v.currentTime; lastSrcMove = now; }
+  const picStopped = ('requestVideoFrameCallback' in HTMLVideoElement.prototype) && now - lastPicFrame > 300;
+  const timeStuck = now - lastSrcMove > 600;
+  // only near the end (sound tails are a few seconds), so a slow/still shot mid-video can't trigger it
+  if ((picStopped || timeStuck) && v.currentTime > 0.5 && v.currentTime > srcOut() - 8) {
+    state.picEndAt = v.currentTime;
+    v.pause();
+  }
+}
 function updateTimes() {
   const a = srcIn(), d = Math.max(0, srcOut() - a);
   const t = clamp(el.src.currentTime - a, 0, d);
@@ -520,7 +550,9 @@ function updateTimes() {
 function togglePlay() {
   ensureAudio();
   if (el.src.paused || srcDone()) {
-    if (srcDone() || el.src.currentTime < srcIn()) el.src.currentTime = srcIn();
+    const atRealEnd = el.src.ended || el.src.currentTime >= srcOut() - 0.04;
+    if (atRealEnd || el.src.currentTime < srcIn()) el.src.currentTime = srcIn();
+    state.picEndAt = null;
     el.src.play().catch(e => toast('Can\'t play: ' + e.message));
   } else el.src.pause();
 }
@@ -529,10 +561,11 @@ el.src.addEventListener('timeupdate', () => { if (!el.src.paused && state.srcOut
 const syncPlayBtn = () => el.playBtn.classList.toggle('playing', !el.src.paused && !srcDone());
 ['play', 'pause', 'ended'].forEach(ev => el.src.addEventListener(ev, syncPlayBtn));
 el.playBtn.onclick = togglePlay;
-el.restartBtn.onclick = () => { el.src.currentTime = srcIn(); updateTimes(); };
+el.restartBtn.onclick = () => { el.src.currentTime = srcIn(); state.picEndAt = null; updateTimes(); };
 el.seek.addEventListener('input', () => {
   seeking = true;
   el.src.currentTime = srcIn() + el.seek.value / 1000 * (srcOut() - srcIn());
+  state.picEndAt = null;
   el.curTime.textContent = fmt(el.src.currentTime - srcIn());
 });
 el.seek.addEventListener('change', () => { seeking = false; });
@@ -552,13 +585,13 @@ setVol(load('vol', 80));
 function refreshTools() {
   el.layoutBtn.textContent = state.layout === 'bubble' ? 'Bubble' : 'Split';
   el.sizeBtn.hidden = state.layout !== 'bubble';
-  el.sizeBtn.textContent = SIZES[state.size].k;
+  el.sizeBtn.textContent = SIZES.reduce((a, b) => Math.abs(b.w - state.bubbleW) < Math.abs(a.w - state.bubbleW) ? b : a).k;
   el.fitBtn.textContent = state.fit === 'contain' ? 'Fit' : 'Fill';
   el.edgeBtn.textContent = { none: 'Edges: off', fade: 'Edges: fade', blur: 'Edges: blur' }[state.vid.edge];
 }
 el.layoutBtn.onclick = () => { state.layout = state.layout === 'bubble' ? 'split' : 'bubble'; save('layout', state.layout); refreshTools(); };
 el.swapBtn.onclick = () => { state.swap = !state.swap; save('swap', state.swap); };
-el.sizeBtn.onclick = () => { state.size = (state.size + 1) % SIZES.length; save('size', state.size); refreshTools(); };
+el.sizeBtn.onclick = () => { const next = SIZES.find(s => s.w > state.bubbleW + 0.01) || SIZES[0]; state.bubbleW = next.w; save('bubbleW', state.bubbleW); refreshTools(); };
 el.edgeBtn.onclick = () => {
   const order = ['none', 'fade', 'blur'];
   state.vid.edge = order[(order.indexOf(state.vid.edge) + 1) % order.length];
@@ -588,7 +621,7 @@ el.stage.addEventListener('pointerdown', e => {
     const bb = bubbleRect();
     const onBubble = drag && drag.inBubble;
     const videoMovable = !state.swap && state.goneT === 0;
-    pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), size: SIZES[state.size].w, target: onBubble || !videoMovable ? 'bubble' : 'video', scale: state.vid.scale };
+    pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), size: state.bubbleW, target: onBubble || !videoMovable ? 'bubble' : 'video', scale: state.vid.scale };
     drag = null;
     return;
   }
@@ -604,10 +637,8 @@ el.stage.addEventListener('pointermove', e => {
     const [a, b] = [...pointers.values()];
     const ratio = Math.hypot(a.x - b.x, a.y - b.y) / pinch.d;
     if (pinch.target === 'video') { state.vid.scale = clamp(pinch.scale * ratio, 0.3, 1.8); return; }
-    const target = pinch.size * ratio;
-    let best = 0;
-    SIZES.forEach((s, i) => { if (Math.abs(s.w - target) < Math.abs(SIZES[best].w - target)) best = i; });
-    if (best !== state.size) { state.size = best; save('size', best); refreshTools(); }
+    state.bubbleW = clamp(pinch.size * ratio, 0.18, 0.75);
+    refreshTools();
     return;
   }
   if (!drag) return;
@@ -624,7 +655,7 @@ el.stage.addEventListener('pointermove', e => {
 });
 function endPointer(e) {
   pointers.delete(e.pointerId);
-  if (pinch) { if (pointers.size < 2) { if (pinch.target === 'video') save('vid', state.vid); pinch = null; } drag = null; return; }
+  if (pinch) { if (pointers.size < 2) { save(pinch.target === 'video' ? 'vid' : 'bubbleW', pinch.target === 'video' ? state.vid : state.bubbleW); pinch = null; } drag = null; return; }
   if (!drag) return;
   if (!drag.moved && performance.now() - drag.t < 400) togglePlay();
   if (drag.inBubble && drag.moved) save('bubble', state.bubble);
@@ -632,6 +663,12 @@ function endPointer(e) {
   drag = null;
 }
 el.stage.addEventListener('pointerup', endPointer);
+// iPhone Safari treats two-finger pinches as "zoom the page" and cancels our touches. Stop that here.
+['gesturestart', 'gesturechange', 'gestureend'].forEach(t => document.addEventListener(t, e => e.preventDefault(), { passive: false }));
+for (const node of [el.stage, el.capCanvas, el.timeline]) {
+  node.addEventListener('touchstart', e => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
+  node.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+}
 el.stage.addEventListener('pointercancel', endPointer);
 
 // ---------------- recording clips ----------------
@@ -805,9 +842,7 @@ async function buildStrip(clip) {
 function removeClip(clip) {
   const i = state.clips.indexOf(clip);
   if (i < 0) return;
-  state.clips.splice(i, 1);
-  Store.del('clip:' + clip.id).catch(() => {});
-  URL.revokeObjectURL(clip.url);
+  state.clips.splice(i, 1); // its video stays stored so Undo can bring it back
   if (i === state.clips.length) { // last clip: rewind the reacted video to where it started
     el.src.pause();
     el.src.currentTime = clip.srcStart;
@@ -863,14 +898,21 @@ const MIN_LEN = 0.5;
 const clipLen = c => c.out - c.in;
 const totalLen = () => state.clips.reduce((s, c) => s + clipLen(c), 0);
 
+// Cut only the quiet bits at the start/end of a clip — never into words.
 function autoCut(c) {
   if (c.userTrimmed) return;
   c.in = 0; c.out = c.duration;
-  if (ed.autoCut && c.speechStart != null) {
-    c.in = clamp(c.speechStart - 0.3, 0, c.duration);
-    c.out = clamp((c.speechEnd ?? c.duration) + 0.5, 0, c.duration);
-    if (c.out - c.in < MIN_LEN) { c.in = 0; c.out = c.duration; }
-  }
+  if (!ed.autoCut) return;
+  // Best: the caption word timings (exact). Otherwise: mic loudness, with generous padding.
+  const words = (c.captions || []).flatMap(L => L.words);
+  let a, b;
+  if (words.length) { a = words[0].s - 0.35; b = words[words.length - 1].e + 0.5; }
+  else if (c.speechStart != null) { a = c.speechStart - 0.6; b = (c.speechEnd ?? c.duration) + 1.0; }
+  else return;
+  // only trim a real stretch of quiet (over half a second)
+  if (a > 0.5) c.in = clamp(a, 0, c.duration);
+  if (c.duration - b > 0.5) c.out = clamp(b, 0, c.duration);
+  if (c.out - c.in < MIN_LEN) { c.in = 0; c.out = c.duration; }
 }
 
 el.nextBtn.onclick = () => { if (state.clips.length) { el.src.pause(); openEditor(); } };
@@ -983,34 +1025,97 @@ function editorTick() {
   }
   const t = clamp(v.currentTime, c.in, c.out);
   const block = el.tlClips.children[ed.idx];
-  if (block) el.tlPlayhead.style.left = (block.offsetLeft + (t - c.in) / Math.max(clipLen(c), 0.01) * block.offsetWidth) + 'px';
+  if (block) {
+    const x = block.offsetLeft + (t - c.in) / Math.max(clipLen(c), 0.01) * block.offsetWidth;
+    el.tlPlayhead.style.left = x + 'px';
+    // zoomed in and playing: keep the playhead on screen
+    if (ed.playing && ed.zoom > 1 && !tl) {
+      const view = el.timeline;
+      if (x < view.scrollLeft + 20 || x > view.scrollLeft + view.clientWidth - 20) view.scrollLeft = x - view.clientWidth * 0.3;
+    }
+  }
   const tt = timelineTime();
-  el.tlTime.textContent = fmt(tt) + ' / ' + fmt(totalLen());
+  const total = totalLen();
+  el.tlTime.textContent = fmt(tt);
+  el.tlTotal.textContent = fmt(total);
+  if (!scrubbing) el.tlScrub.value = total ? Math.round(tt / total * 1000) : 0;
   if (ed.sel === ed.idx) el.playhead.style.left = (v.currentTime / c.duration * 100) + '%';
   syncOverlays(tt, ed.playing);
   drawPreviewLayer(tt);
 }
 
-// timeline: tap = select, hold or slide = drag to move
+// ----- scrub bar: drag to any point of the edited video -----
+let scrubbing = false;
+el.tlScrub.addEventListener('input', () => {
+  if (!scrubbing) { scrubbing = true; pausePreview(); if (ed.sel >= 0) selectClip(-1); }
+  seekTimeline(el.tlScrub.value / 1000 * totalLen());
+});
+const endScrub = () => { scrubbing = false; };
+el.tlScrub.addEventListener('change', endScrub);
+el.tlScrub.addEventListener('pointerup', endScrub);
+el.tlScrub.addEventListener('touchend', endScrub);
+
+// ----- timeline zoom -----
+ed.zoom = 1;
+function setZoom(z, anchorX) {
+  const view = el.timeline;
+  const r = view.getBoundingClientRect();
+  const ax = anchorX != null ? anchorX - r.left : view.clientWidth / 2;
+  const oldW = el.tlInner.offsetWidth || view.clientWidth;
+  const frac = (view.scrollLeft + ax) / oldW; // keep this point under the finger
+  ed.zoom = clamp(z, 1, 12);
+  el.tlInner.style.width = (ed.zoom * 100) + '%';
+  const newW = el.tlInner.offsetWidth;
+  view.scrollLeft = frac * newW - ax;
+  el.zoomOut.disabled = ed.zoom <= 1;
+  el.zoomIn.disabled = ed.zoom >= 12;
+}
+// zoom buttons keep the playhead in the middle
+function centerOn(x) { el.timeline.scrollLeft = x - el.timeline.clientWidth / 2; }
+el.zoomIn.onclick = () => { setZoom(ed.zoom * 1.6); centerOn(el.tlPlayhead.offsetLeft); };
+el.zoomOut.onclick = () => { setZoom(ed.zoom / 1.6); centerOn(el.tlPlayhead.offsetLeft); };
+
+// ----- timeline touches -----
+// tap a clip = select it · slide = scroll (when zoomed) · press & hold a clip = drag to move it · pinch = zoom
 let tl = null;
+const tlPointers = new Map();
+let tlPinch = null;
 el.timeline.addEventListener('pointerdown', e => {
-  const block = e.target.closest('.tl-clip');
-  if (!block) return;
   el.timeline.setPointerCapture(e.pointerId);
-  tl = { i: Number(block.dataset.i), x0: e.clientX, dragging: false, moved: false };
-  tl.timer = setTimeout(startDrag, 280);
+  tlPointers.set(e.pointerId, e.clientX);
+  if (tlPointers.size === 2) {
+    if (tl) { clearTimeout(tl.timer); [...el.tlClips.children].forEach(b => b.classList.remove('dragging')); tl = null; }
+    const [a, b] = [...tlPointers.values()];
+    tlPinch = { d: Math.max(20, Math.abs(a - b)), z: ed.zoom };
+    return;
+  }
+  const block = e.target.closest('.tl-clip');
+  tl = { i: block ? Number(block.dataset.i) : -1, x0: e.clientX, scroll0: el.timeline.scrollLeft, dragging: false, moved: false };
+  if (block) tl.timer = setTimeout(startDrag, 300);
 });
 function startDrag() {
-  if (!tl || tl.dragging) return;
+  if (!tl || tl.dragging || tl.moved || tl.i < 0) return;
+  pushUndo();
   tl.dragging = true;
   pausePreview();
   navigator.vibrate?.(12);
   el.tlClips.children[tl.i]?.classList.add('dragging');
 }
 el.timeline.addEventListener('pointermove', e => {
+  if (!tlPointers.has(e.pointerId)) return;
+  tlPointers.set(e.pointerId, e.clientX);
+  if (tlPinch && tlPointers.size === 2) {
+    const [a, b] = [...tlPointers.values()];
+    setZoom(tlPinch.z * Math.max(20, Math.abs(a - b)) / tlPinch.d, (a + b) / 2);
+    return;
+  }
   if (!tl) return;
-  if (Math.abs(e.clientX - tl.x0) > 10) { tl.moved = true; startDrag(); }
-  if (!tl.dragging) return;
+  if (!tl.dragging) {
+    // sliding before the hold kicks in = scroll the timeline
+    if (Math.abs(e.clientX - tl.x0) > 8) { tl.moved = true; clearTimeout(tl.timer); }
+    if (tl.moved) el.timeline.scrollLeft = tl.scroll0 - (e.clientX - tl.x0);
+    return;
+  }
   const blocks = [...el.tlClips.children];
   let target = 0;
   blocks.forEach((b, j) => {
@@ -1030,21 +1135,76 @@ el.timeline.addEventListener('pointermove', e => {
     el.tlClips.children[target].classList.add('dragging');
   }
 });
-function endTl() {
+function endTl(e) {
+  tlPointers.delete(e.pointerId);
+  if (tlPinch) { if (tlPointers.size < 2) tlPinch = null; return; }
   if (!tl) return;
   clearTimeout(tl.timer);
   [...el.tlClips.children].forEach(b => b.classList.remove('dragging'));
-  if (!tl.dragging && !tl.moved) selectClip(tl.i === ed.sel ? -1 : tl.i);
-  else { renderTimeline(); if (ed.sel >= 0) selectClip(ed.sel); saveSession(); }
+  if (!tl.dragging && !tl.moved) { if (tl.i >= 0) selectClip(tl.i === ed.sel ? -1 : tl.i); }
+  else if (tl.dragging) { renderTimeline(); if (ed.sel >= 0) selectClip(ed.sel); saveSession(); }
   tl = null;
   renderClips();
 }
 el.timeline.addEventListener('pointerup', endTl);
 el.timeline.addEventListener('pointercancel', endTl);
 
+// ----- undo / redo (everything you change in the editor) -----
+const undoStack = [], redoStack = [];
+function editSnapshot() {
+  return {
+    clips: state.clips.map(c => ({ c, m: { in: c.in, out: c.out, userTrimmed: c.userTrimmed, captions: c.captions ? JSON.parse(JSON.stringify(c.captions)) : null } })),
+    overlays: state.overlays.map(o => ({ o, m: { start: o.start, dur: o.dur, vin: o.vin, x: o.x, y: o.y, w: o.w, sound: o.sound } })),
+    cap: { ...state.cap },
+    autoCut: ed.autoCut,
+  };
+}
+function applySnapshot(s) {
+  pausePreview();
+  state.clips = s.clips.map(({ c, m }) => Object.assign(c, m));
+  state.overlays = s.overlays.map(({ o, m }) => Object.assign(o, m));
+  state.cap = { ...s.cap };
+  ed.autoCut = s.autoCut;
+  for (const o of state.overlays) loadOverlayMedia(o).catch(() => {});
+  ed.idx = Math.min(ed.idx, Math.max(0, state.clips.length - 1));
+  selectOverlay(null);
+  selectClip(-1);
+  renderClips();
+  renderTimeline();
+  refreshCapBtn();
+  if (state.clips.length) seekTimeline(Math.min(timelineTime(), Math.max(0, totalLen() - 0.05)));
+  if (sheetMode) renderSheet();
+  saveSession();
+}
+function pushUndo() {
+  undoStack.push(editSnapshot());
+  if (undoStack.length > 60) undoStack.shift();
+  redoStack.length = 0;
+  refreshUndo();
+}
+function refreshUndo() {
+  el.undoEd.disabled = !undoStack.length;
+  el.redoEd.disabled = !redoStack.length;
+}
+el.undoEd.onclick = () => {
+  if (!undoStack.length) return;
+  redoStack.push(editSnapshot());
+  applySnapshot(undoStack.pop());
+  refreshUndo();
+  toast('Undone');
+};
+el.redoEd.onclick = () => {
+  if (!redoStack.length) return;
+  undoStack.push(editSnapshot());
+  applySnapshot(redoStack.pop());
+  refreshUndo();
+  toast('Redone');
+};
+
 function moveSel(d) {
   const i = ed.sel, j = i + d;
   if (i < 0 || j < 0 || j >= state.clips.length) return;
+  pushUndo();
   [state.clips[i], state.clips[j]] = [state.clips[j], state.clips[i]];
   renderClips();
   selectClip(j);
@@ -1055,15 +1215,18 @@ el.cpRight.onclick = () => moveSel(1);
 el.cpDone.onclick = () => selectClip(-1);
 el.cpDelete.onclick = () => {
   const c = state.clips[ed.sel];
-  if (!c || !confirm(`Delete clip ${ed.sel + 1}?`)) return;
+  if (!c) return;
+  pushUndo();
   pausePreview();
   removeClip(c);
+  toast('Clip deleted — tap Undo (↶) to bring it back');
   if (!state.clips.length) { enterStudio(); return; }
   ed.idx = 0;
   selectClip(-1);
   loadPreview(0, state.clips[0].in, false);
 };
 el.autoCutBtn.onclick = () => {
+  pushUndo();
   ed.autoCut = !ed.autoCut;
   save('autoCut', ed.autoCut);
   state.clips.forEach(autoCut);
@@ -1100,7 +1263,7 @@ trimZone.addEventListener('pointerdown', e => {
   const px = t => r.left + t / c.duration * r.width;
   const nearL = Math.abs(e.clientX - px(c.in)), nearR = Math.abs(e.clientX - px(c.out));
   let which = null;
-  if (Math.min(nearL, nearR) < 32) which = nearL <= nearR ? 'in' : 'out';
+  if (Math.min(nearL, nearR) < 32) { which = nearL <= nearR ? 'in' : 'out'; pushUndo(); }
   trimDrag = { which, tAt, c };
   pausePreview();
   ed.mode = 'clip';
@@ -1160,9 +1323,8 @@ async function finishRetake(clip) {
   const i = state.clips.indexOf(r.clip);
   if (i < 0) state.clips.push(clip);
   else {
-    state.clips[i] = clip;
-    Store.del('clip:' + r.clip.id).catch(() => {});
-    URL.revokeObjectURL(r.clip.url);
+    pushUndo();
+    state.clips[i] = clip; // the old take stays stored so Undo can bring it back
   }
   busy(true, 'Adding your retake…');
   await storeClip(clip);
@@ -1246,6 +1408,7 @@ el.capCanvas.addEventListener('pointerdown', e => {
   const sel = ovById(ovSel);
   if (capPointers.size === 2 && sel) { // pinch the selected overlay
     const [a, b] = [...capPointers.values()];
+    pushUndo();
     capDrag = { kind: 'pinch', o: sel, d: Math.hypot(a.x - b.x, a.y - b.y), w: sel.w, moved: true };
     return;
   }
@@ -1268,13 +1431,13 @@ el.capCanvas.addEventListener('pointermove', e => {
     capDrag.o.w = clamp(capDrag.w * Math.hypot(a.x - b.x, a.y - b.y) / capDrag.d, 0.1, 1.2);
     el.ovSize.value = Math.round(Math.min(1, capDrag.o.w) * 100);
   } else if (capDrag.kind === 'ov') {
-    if (Math.hypot(p.x - capDrag.p0.x, p.y - capDrag.p0.y) > 14) capDrag.moved = true;
+    if (!capDrag.moved && Math.hypot(p.x - capDrag.p0.x, p.y - capDrag.p0.y) > 14) { capDrag.moved = true; pushUndo(); }
     if (!capDrag.moved) return;
     capDrag.o.x = clamp(capDrag.x + (p.x - capDrag.p0.x) / W, 0, 1);
     capDrag.o.y = clamp(capDrag.y + (p.y - capDrag.p0.y) / H, 0, 1);
   } else {
     const dy = e.clientY - capDrag.y0;
-    if (Math.abs(dy) > 8) capDrag.moved = true;
+    if (Math.abs(dy) > 8 && !capDrag.moved && state.cap.on) { capDrag.moved = true; pushUndo(); }
     if (!capDrag.moved || !state.cap.on) return;
     state.cap.y = clamp(capDrag.startY + dy / capDrag.h, 0.12, 0.9);
   }
@@ -1304,22 +1467,39 @@ Captions.onProgress(p => {
   }
 });
 
+// Whisper sometimes "hears" words in silence ("you", "Thank you."). Drop those.
+const PHANTOMS = new Set(['you', 'thank you', 'thanks', 'thanks for watching', 'bye', 'okay', 'oh', 'uh', 'um', 'hmm', 'so', '']);
+function dropPhantomWords(words, c) {
+  const text = words.map(w => w.w).join(' ').toLowerCase().replace(/[^a-z' ]/g, '').trim();
+  const micHeardNothing = c.speechStart == null;
+  if (PHANTOMS.has(text)) return [];
+  if (micHeardNothing && words.length <= 3) return [];
+  return words;
+}
 async function captionClips() {
   if (capJob) return capJob;
   capJob = (async () => {
     refreshCapBtn();
     const todo = state.clips.filter(c => !c.captions);
+    const silent = [];
     let n = 0;
     for (const c of todo) {
       n++;
-      capStatus = `Listening to clip ${state.clips.indexOf(c) + 1}${todo.length > 1 ? ` (${n} of ${todo.length})` : ''}…`;
+      const num = state.clips.indexOf(c) + 1;
+      capStatus = `Listening to clip ${num}${todo.length > 1 ? ` (${n} of ${todo.length})` : ''}…`;
       if (sheetMode === 'captions') renderSheet();
-      const words = await Captions.transcribe(c.micBlob || c.blob, ac);
+      // Your own mic first; if that gave nothing (or the phone couldn't read it), try the clip's sound.
+      let words = [];
+      if (c.micBlob) { try { words = await Captions.transcribe(c.micBlob, ac); } catch (e) { console.warn('mic audio', e); } }
+      if (!words.length) { try { words = await Captions.transcribe(c.blob, ac); } catch (e) { console.warn('clip audio', e); } }
+      words = dropPhantomWords(words, c);
       c.captions = Captions.toLines(words);
-      rebuildTimelineCaptions();
+      if (!words.length) silent.push(num);
+      if (!c.userTrimmed) autoCut(c); // word timings make Cut silence exact
+      if (el.review.classList.contains('active')) renderTimeline(); else rebuildTimelineCaptions();
       saveSession();
     }
-    capStatus = '';
+    capStatus = silent.length ? `No words were heard in clip ${silent.join(', ')}. If you were talking, tap "Redo all captions".` : '';
   })();
   try { await capJob; }
   catch (e) {
@@ -1631,10 +1811,12 @@ function renderCaptionSheet(body) {
         <input type="color" value="${state.cap.hi || '#ffe500'}">＋
       </label>
     </div>` : ''}
+    ${have && !tlLines.length && !capJob ? '<p class="cap-progress">Captions are on, but no words were found in your clips. If you were talking, tap "Redo all captions" below.</p>' : ''}
     <div class="cap-lines"></div>
     ${have && !capJob ? '<div class="cap-actions"><button class="btn ghost" data-act="redo">Redo all captions</button></div>' : ''}
     ${!have && !capJob ? '<p class="sheet-tip">The first time, the phone downloads the caption engine (about 80 MB). After that it works offline.</p>' : ''}`;
   const setHi = c => {
+    pushUndo();
     state.cap.hi = c || null;
     saveSession();
     renderSheet();
@@ -1646,14 +1828,16 @@ function renderCaptionSheet(body) {
   body.querySelectorAll('[data-style]').forEach(b => {
     drawStyleSample(b.querySelector('canvas'), b.dataset.style);
     b.onclick = () => {
+      pushUndo();
       state.cap.style = b.dataset.style; state.cap.on = true;
       refreshCapBtn(); rebuildTimelineCaptions(); saveSession(); renderSheet();
       if (!ed.playing) drawPreviewLayer(timelineTime());
     };
   });
   const act = a => body.querySelector(`[data-act="${a}"]`);
-  act('toggle') && (act('toggle').onclick = () => { state.cap.on = !state.cap.on; refreshCapBtn(); saveSession(); renderSheet(); });
+  act('toggle') && (act('toggle').onclick = () => { pushUndo(); state.cap.on = !state.cap.on; refreshCapBtn(); saveSession(); renderSheet(); });
   const make = async () => {
+    pushUndo();
     state.cap.on = true;
     refreshCapBtn();
     const p = captionClips();
@@ -1672,9 +1856,9 @@ function renderCaptionSheet(body) {
     row.innerHTML = `<small>${fmt1(L.s)}</small><input value="${esc(L.ref.words.map(w => w.w).join(' '))}" enterkeyhint="done"><button aria-label="Remove line">✕</button>`;
     const input = row.querySelector('input');
     input.onfocus = () => { pausePreview(); seekTimeline(L.s + 0.05); };
-    input.onchange = () => { Captions.setLineText(L.ref, input.value); rebuildTimelineCaptions(); saveSession(); };
+    input.onchange = () => { pushUndo(); Captions.setLineText(L.ref, input.value); rebuildTimelineCaptions(); saveSession(); };
     input.onkeydown = e => { if (e.key === 'Enter') input.blur(); };
-    row.querySelector('button').onclick = () => { Captions.setLineText(L.ref, ''); rebuildTimelineCaptions(); saveSession(); renderSheet(); };
+    row.querySelector('button').onclick = () => { pushUndo(); Captions.setLineText(L.ref, ''); rebuildTimelineCaptions(); saveSession(); renderSheet(); };
     box.appendChild(row);
   });
 }
@@ -1710,40 +1894,65 @@ function seekTimeline(tt) {
 
 function renderSetup(body) {
   const appURL = location.origin + location.pathname;
-  const cmd = 'cd ~/Documents && rm -f reaction-video.mp4 && yt-dlp --no-playlist -f "b[ext=mp4][vcodec^=avc]/bv*[vcodec^=avc][height<=1920]+ba[ext=m4a]/b[ext=mp4]/b" --merge-output-format mp4 -o reaction-video.mp4 "LINK" ; open shortcuts://';
+  const cmd = [
+    'cd ~/Documents',
+    'rm -f reaction-video.mp4',
+    'yt-dlp --no-playlist --force-overwrites -f "b[ext=mp4][vcodec^=avc]/bv*[vcodec^=avc][height<=1920]+ba[ext=m4a]/b[ext=mp4]/b" --merge-output-format mp4 -o reaction-video.mp4 "LINK"',
+    'open "shortcuts://run-shortcut?name=ReactionStudioSave"',
+  ].join('\n');
+  const back = 'x-safari-' + appURL + '?got=1';
+  const copy = (text, label = 'Copy') => `<pre>${esc(text)}</pre><button class="copy" data-copy="${esc(text)}">${label}</button>`;
   body.innerHTML = `<div class="setup">
-    <p class="sheet-tip">Do this once. After that: in Instagram, TikTok or YouTube tap <b>Share → Reaction Studio</b>, and the video lands here.</p>
-    <h3>1 · Get the free downloader</h3>
+    <p class="sheet-tip">Do this once. After that, in Instagram, TikTok or YouTube tap <b>Share → Reaction Studio</b> and the video lands here.
+    It uses <b>two</b> shortcuts: one downloads, the other saves the video and brings you back.</p>
+
+    <h3>1 · The downloader (a-Shell)</h3>
     <ol>
-      <li>Install <b>a-Shell</b> from the App Store (free).</li>
-      <li>Open it, paste this, press return, and wait for it to finish:
-        <pre>pip install yt-dlp</pre><button class="copy" data-copy="pip install yt-dlp">Copy</button></li>
+      <li>Install <b>a-Shell</b> from the App Store (free). Use the full a-Shell, not "mini": Instagram sends picture and sound separately, and only the full one can join them.</li>
+      <li>Open a-Shell, paste this, press <b>return</b>, and wait for "Successfully installed":
+        ${copy('pip install yt-dlp')}</li>
     </ol>
-    <h3>2 · Make the Shortcut</h3>
+
+    <h3>2 · Shortcut 1: "Reaction Studio" (downloads)</h3>
     <ol>
-      <li>Open <b>Shortcuts</b> → <b>+</b>. Name it exactly <b>${SHORTCUT_NAME}</b>.</li>
-      <li>Tap <b>ⓘ</b> → turn on <b>Show in Share Sheet</b>. Set it to receive <b>URLs</b> and <b>Text</b>, and "If there's no input" → <b>Get Clipboard</b>.</li>
-      <li>Add the a-Shell action <b>Execute Command</b>. Paste this into it:
-        <pre>${esc(cmd)}</pre><button class="copy" data-copy="${esc(cmd)}">Copy</button>
-        Then select the word <b>LINK</b> and replace it with the <b>Shortcut Input</b> variable (it stays inside the quotes). If the action has an <b>Open a-Shell</b> / run-in-app option, turn it on.</li>
-      <li>Add <b>Get File</b>: folder <b>On My iPhone › a-Shell</b>, file <b>reaction-video.mp4</b>.</li>
-      <li>Add <b>Save to Photo Album</b> (Recents).</li>
-      <li>Add <b>Open URLs</b> with:
-        <pre>${esc(appURL)}?got=1</pre><button class="copy" data-copy="${esc(appURL)}?got=1">Copy</button></li>
+      <li>Open <b>Shortcuts</b> → tap <b>+</b> (top right). Tap the name at the top → <b>Rename</b> → <b>Reaction Studio</b>.</li>
+      <li>Tap the name at the top again (the little <b>⌄</b>) → <b>Details</b> → turn on <b>Show in Share Sheet</b> → Done.</li>
+      <li>A block appears at the top: "Receive <b>Any</b> input from Share Sheet". Tap <b>Any</b> → keep only <b>URLs</b> and <b>Text</b>.
+        Tap "If there's no input: <b>Continue</b>" → choose <b>Get Clipboard</b>.</li>
+      <li>Tap <b>Search Actions</b> at the bottom → type <b>Execute Command</b> → tap the one with the a-Shell icon.</li>
+      <li>Tap the blue word <b>Command</b> and paste this (it's 4 lines):
+        ${copy(cmd)}
+        Then double-tap the word <b>LINK</b> (3rd line) and tap <b>Shortcut Input</b> in the bar above the keyboard. It must stay between the quotes.</li>
+      <li>In the same block, set <b>"Open the app to execute the commands?"</b> to <b>Yes</b>.</li>
+      <li>Tap <b>‹</b> (top left) to save.</li>
     </ol>
-    <h3>3 · Try it</h3>
+
+    <h3>3 · Shortcut 2: "ReactionStudioSave" (saves + brings you back)</h3>
     <ol>
-      <li>In Instagram, open a Reel → <b>Share</b> → find <b>${SHORTCUT_NAME}</b> (you may need to scroll the app row or tap More).</li>
-      <li>a-Shell opens, downloads, the Shortcut saves it to Photos and brings you back here. Tap <b>Tap to choose your video</b>.</li>
+      <li>In Shortcuts tap <b>+</b> again. Rename it to exactly this (no spaces):
+        ${copy('ReactionStudioSave', 'Copy name')}</li>
+      <li>Search Actions → <b>Get File from Folder</b>. Tap <b>Folder</b> → On My iPhone → <b>a-Shell</b> → Open. Tap <b>File Path</b> and type:
+        ${copy('reaction-video.mp4')}</li>
+      <li>Search Actions → <b>Save to Photo Album</b> (leave it as it is).</li>
+      <li>Search Actions → <b>Open URLs</b>. Tap <b>URL</b> and paste this (the <i>x-safari-</i> part makes it open in Safari even if Chrome is your default browser):
+        ${copy(back)}</li>
+      <li>Leave "Show in Share Sheet" <b>off</b> for this one. Tap <b>‹</b> to save.</li>
     </ol>
-    <p class="note">Tips: if links stop working, open a-Shell and run <code>pip install -U yt-dlp</code> (sites change often). Some Instagram videos need you to be logged in and may not download. Use the app in <b>Safari</b> — if you add it to your Home Screen and see "Open as Web App", turn that off so the Shortcut comes back to the same place.</p>
+
+    <h3>4 · Try it</h3>
+    <ol>
+      <li>In Instagram open a <b>Reel</b> → <b>Share</b> → scroll the row of apps (or tap More) → <b>Reaction Studio</b>.</li>
+      <li>The first time, tap <b>Allow</b> on each question (a-Shell folder, Photos, opening the website).</li>
+      <li>a-Shell shows the download, then Safari opens this app on <b>Tap to choose your video</b>. The new video is the first one in the list.</li>
+    </ol>
+    <p class="note">If links stop working one day, open a-Shell and run <code>pip install -U yt-dlp</code> (sites change often). Some Instagram videos need a login and won't download. Instagram and TikTok work best; YouTube may not.</p>
     <div class="cap-actions"><button class="btn primary" data-act="done">I've set it up</button></div>
   </div>`;
   body.querySelectorAll('[data-copy]').forEach(b => b.onclick = async () => {
-    try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = 'Copied ✓'; }
+    try { await navigator.clipboard.writeText(b.dataset.copy); const t = b.textContent; b.textContent = 'Copied ✓'; setTimeout(() => { b.textContent = t; }, 1500); }
     catch { toast('Long-press the text to copy it'); }
   });
-  body.querySelector('[data-act="done"]').onclick = () => { save('setupDone', true); closeSheet(); toast('Now paste a link and tap Get video, or share from Instagram'); };
+  body.querySelector('[data-act="done"]').onclick = () => { save('setupDone', true); closeSheet(); toast('Now share a Reel to "Reaction Studio", or paste a link and tap Get video'); };
 }
 
 // ---------------- player + saving to Photos ----------------
@@ -1800,6 +2009,7 @@ function resetSession() {
   clearOverlays();
   state.cap = { on: false, style: state.cap.style, y: state.cap.y };
   ed.sel = -1; ed.idx = 0;
+  undoStack.length = 0; redoStack.length = 0; refreshUndo();
   el.reviewVideo.removeAttribute('src'); el.reviewVideo.dataset.src = ''; el.reviewVideo.load();
   el.src.pause();
   el.resumeBtn.hidden = true;
@@ -1915,6 +2125,7 @@ el.ovInput.onchange = async () => {
     o.thumb = thumbOf(m, o.aspect);
   } catch (e) { busy(false); toast('Couldn\'t open that file.'); return; }
   busy(false);
+  pushUndo();
   state.overlays.push(o);
   Store.set('ov:' + o.id, { blob: o.blob }).catch(() => toast('Phone storage is full — the overlay won\'t survive closing the app.'));
   selectOverlay(o.id);
@@ -1950,35 +2161,42 @@ function selectOverlay(id) {
   } else if (ed.sel < 0) el.tlTip.hidden = false;
   renderOvLane();
   if (!ed.playing) drawPreviewLayer(timelineTime());
+  // make sure its bar is on screen when the timeline is zoomed in
+  const bar = o && el.ovLane.querySelector(`[data-id="${o.id}"]`);
+  if (bar && ed.zoom > 1) {
+    const v = el.timeline;
+    if (bar.offsetLeft < v.scrollLeft || bar.offsetLeft + Math.min(bar.offsetWidth, v.clientWidth) > v.scrollLeft + v.clientWidth) v.scrollLeft = bar.offsetLeft - 24;
+  }
 }
 el.ovDone.onclick = () => selectOverlay(null);
 el.ovDelete.onclick = () => {
   const o = ovById(ovSel);
-  if (!o || !confirm('Remove this overlay?')) return;
+  if (!o) return;
+  pushUndo();
   removeOverlay(o);
 };
 function removeOverlay(o) {
   state.overlays = state.overlays.filter(x => x !== o);
   const m = ovMedia.get(o.id);
-  if (m && m.tagName === 'VIDEO') { m.pause(); m.removeAttribute('src'); m.load(); m.remove(); }
-  ovMedia.delete(o.id);
-  URL.revokeObjectURL(o.url);
-  Store.del('ov:' + o.id).catch(() => {});
+  if (m && m.tagName === 'VIDEO') m.pause(); // kept so Undo can bring it back
   selectOverlay(null);
   saveSession();
 }
 el.ovSound.onclick = () => {
   const o = ovById(ovSel); if (!o) return;
+  pushUndo();
   o.sound = !o.sound;
   el.ovSound.textContent = o.sound ? 'Sound on' : 'Sound off';
   saveSession();
 };
 el.ovFront.onclick = () => {
   const o = ovById(ovSel); if (!o) return;
+  pushUndo();
   state.overlays = state.overlays.filter(x => x !== o).concat(o);
   renderOvLane(); saveSession();
   if (!ed.playing) drawPreviewLayer(timelineTime());
 };
+el.ovSize.addEventListener('pointerdown', () => { if (ovById(ovSel)) pushUndo(); });
 el.ovSize.oninput = () => {
   const o = ovById(ovSel); if (!o) return;
   o.w = el.ovSize.value / 100;
@@ -2017,7 +2235,7 @@ el.ovLane.addEventListener('pointerdown', e => {
 el.ovLane.addEventListener('pointermove', e => {
   const d = ovLaneDrag; if (!d) return;
   const dt = (e.clientX - d.x0) / d.laneW * totalLen();
-  if (Math.abs(e.clientX - d.x0) > 6) d.moved = true;
+  if (!d.moved && Math.abs(e.clientX - d.x0) > 6) { d.moved = true; pushUndo(); }
   if (!d.moved) return;
   const o = d.o, total = totalLen();
   const maxDur = o.kind === 'video' ? o.natDur - o.vin : Infinity;
@@ -2056,11 +2274,8 @@ async function restoreOverlays(list) {
   }
 }
 function clearOverlays() {
-  for (const o of state.overlays) {
-    const m = ovMedia.get(o.id);
-    if (m && m.tagName === 'VIDEO') { m.pause(); m.removeAttribute('src'); m.load(); m.remove(); }
-    URL.revokeObjectURL(o.url);
-  }
+  for (const m of ovMedia.values()) if (m.tagName === 'VIDEO') { m.pause(); m.removeAttribute('src'); m.load(); m.remove(); }
+  for (const o of state.overlays) URL.revokeObjectURL(o.url);
   ovMedia.clear();
   state.overlays = [];
   ovSel = null;

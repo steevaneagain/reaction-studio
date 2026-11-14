@@ -1,6 +1,6 @@
 // Keeps the app working with bad or no signal: serves the last copy when offline.
 // (The caption engine caches its own model files.)
-const CACHE = 'reaction-studio-v1';
+const CACHE = 'reaction-studio-v2';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'store.js', 'captions.js', 'captions-worker.js',
   'manifest.webmanifest', 'icon.svg', 'icon-180.png', 'icon-512.png'];
 
