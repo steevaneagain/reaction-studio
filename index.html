@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#0b0b0d">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="React">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="icon" href="icon.svg">
+  <title>Reaction Studio</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- ============ HOME ============ -->
+  <section id="loadScreen" class="screen active">
+    <div class="load-wrap">
+      <div class="brand">
+        <span class="brand-dot"></span>
+        <h1>Reaction Studio</h1>
+      </div>
+
+      <button id="resumeBtn" class="resume" hidden>
+        <b>Continue your reaction</b>
+        <small id="resumeInfo">3 clips</small>
+      </button>
+
+      <p class="sub">Paste an Instagram, TikTok or YouTube link.</p>
+      <form id="linkForm" class="link-form" autocomplete="off">
+        <input id="linkInput" type="url" inputmode="url" placeholder="https://…" spellcheck="false">
+        <div class="row">
+          <button type="button" id="pasteBtn" class="btn ghost">Paste</button>
+          <button type="submit" id="getBtn" class="btn primary">Get video</button>
+        </div>
+      </form>
+
+      <div id="gotPanel" class="got-panel" hidden>
+        <p><b>Video saved to your Photos.</b> Tap below and pick it. It's the newest one.</p>
+      </div>
+
+      <label id="pickLabel" class="btn ghost file-btn">
+        <span id="pickText">Pick a video from my phone</span>
+        <input id="fileInput" type="file" accept="video/*" hidden>
+      </label>
+
+      <div class="home-links">
+        <button id="myVideosBtn" class="link-btn" type="button">My videos</button>
+        <button id="setupBtn" class="link-btn" type="button">Set up link downloads</button>
+      </div>
+
+      <p id="loadStatus" class="status" role="status"></p>
+    </div>
+  </section>
+
+  <!-- ============ STUDIO (recording) ============ -->
+  <section id="studio" class="screen">
+    <div class="stage-wrap">
+      <canvas id="stage" width="1080" height="1920"></canvas>
+      <div id="hint" class="hint">Tap the video to play / pause · drag the bubble</div>
+    </div>
+
+    <div id="segBar" class="segbar" hidden></div>
+    <div id="retakeBar" class="retake-bar" hidden>
+      <span>Retaking <b id="retakeName">clip 1</b> · original <b id="retakeLen">0:00</b></span>
+      <button id="retakeCancel" class="cp-btn">Cancel</button>
+    </div>
+
+    <header class="topbar">
+      <button id="backBtn" class="icon-btn" aria-label="Start over">
+        <svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+      <div id="recTimer" class="rec-timer" hidden><span></span><b id="recTime">0:00</b></div>
+      <div class="tools">
+        <button id="trimSrcBtn" class="chip" aria-label="Trim the video you're reacting to">Trim</button>
+        <button id="edgeBtn" class="chip" aria-label="Edges of the video: off, fade or blur">Edges: off</button>
+        <button id="layoutBtn" class="chip" aria-label="Change layout">Bubble</button>
+        <button id="swapBtn" class="chip" aria-label="Swap video and camera">Swap</button>
+        <button id="sizeBtn" class="chip" aria-label="Bubble size">M</button>
+        <button id="fitBtn" class="chip" aria-label="Fit or fill video">Fit</button>
+        <button id="flipBtn" class="icon-btn small" aria-label="Flip camera">
+          <svg viewBox="0 0 24 24"><path d="M4 7h11l-3-3M20 17H9l3 3"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <footer class="controls">
+      <div class="scrub">
+        <button id="restartBtn" class="mini-btn" aria-label="Video back to start">
+          <svg viewBox="0 0 24 24"><path d="M6 5v14M19 5l-9 7 9 7z"/></svg>
+        </button>
+        <span id="curTime">0:00</span>
+        <input id="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Video position">
+        <span id="durTime">0:00</span>
+      </div>
+      <div class="vol">
+        <svg viewBox="0 0 24 24"><path d="M4 10v4h4l5 4V6L8 10H4z"/><path d="M16 9a4 4 0 010 6"/></svg>
+        <input id="vol" type="range" min="0" max="100" value="80" aria-label="Video volume">
+        <span id="volPct">80%</span>
+      </div>
+      <div class="buttons">
+        <div class="side">
+          <button id="undoBtn" class="icon-btn" aria-label="Delete last clip" disabled>
+            <svg viewBox="0 0 24 24"><path d="M21 5H9l-6 7 6 7h12z"/><path d="M17 9l-5 6M12 9l5 6"/></svg>
+          </button>
+          <button id="playBtn" class="icon-btn" aria-label="Play / pause video">
+            <svg class="i-play" viewBox="0 0 24 24"><path d="M7 5l12 7-12 7z"/></svg>
+            <svg class="i-pause" viewBox="0 0 24 24"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg>
+          </button>
+        </div>
+        <button id="recBtn" class="rec-btn" aria-label="Record clip (tap, or hold)"><span></span></button>
+        <div class="side">
+          <button id="clipsBtn" class="clip-thumb" aria-label="See clips" disabled>
+            <img id="lastClipThumb" alt="">
+            <i id="clipCount">0</i>
+          </button>
+          <button id="nextBtn" class="next-btn" aria-label="Next: edit" disabled>
+            <svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
+          </button>
+        </div>
+      </div>
+    </footer>
+  </section>
+
+  <!-- ============ EDITOR (timeline) ============ -->
+  <section id="review" class="screen">
+    <div class="review-top">
+      <button id="reviewBack" class="chip">‹ Record more</button>
+      <span class="review-title"><b id="totalLen">0:00</b></span>
+      <button id="saveFinal" class="save-chip">Save</button>
+    </div>
+    <div class="review-video">
+      <div id="previewBox" class="preview-box">
+        <video id="reviewVideo" playsinline webkit-playsinline preload="auto"></video>
+        <canvas id="capCanvas" width="1080" height="1920"></canvas>
+        <button id="reviewPlay" class="review-play" aria-label="Play / pause">
+          <svg viewBox="0 0 24 24"><path d="M7 5l12 7-12 7z"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="editor">
+      <div class="tl-head">
+        <button id="playAll" class="mini-play" aria-label="Play all">
+          <svg class="i-play" viewBox="0 0 24 24"><path d="M7 5l12 7-12 7z"/></svg>
+          <svg class="i-pause" viewBox="0 0 24 24"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg>
+        </button>
+        <span id="tlTime">0:00 / 0:00</span>
+        <div class="tl-chips">
+          <button id="ovAddBtn" class="chip">+ Overlay</button>
+          <button id="captionsBtn" class="chip">Captions</button>
+          <button id="autoCutBtn" class="chip cut-chip" aria-pressed="true">Cut silence</button>
+        </div>
+      </div>
+      <div id="timeline" class="timeline">
+        <div id="tlClips" class="tl-clips"></div>
+        <div id="ovLane" class="ov-lane" hidden></div>
+        <div id="tlPlayhead" class="tl-playhead"></div>
+      </div>
+      <input id="ovInput" type="file" accept="image/*,video/*" hidden>
+      <p id="tlTip" class="trim-tip">Tap a clip to trim it · hold &amp; drag to move it</p>
+
+      <div id="clipPanel" class="clip-panel" hidden>
+        <div class="cp-head">
+          <b id="cpTitle">Clip 1</b>
+          <div class="cp-acts">
+            <button id="cpLeft" class="cp-btn" aria-label="Move clip left">‹</button>
+            <button id="cpRight" class="cp-btn" aria-label="Move clip right">›</button>
+            <button id="cpRetake" class="cp-btn retake">Retake</button>
+            <button id="cpDelete" class="cp-btn danger">Delete</button>
+            <button id="cpDone" class="cp-btn done">Done</button>
+          </div>
+        </div>
+        <div id="trimTrack" class="trim-track">
+          <div id="shadeL" class="trim-shade"></div>
+          <div id="shadeR" class="trim-shade"></div>
+          <div id="trimSel" class="trim-sel">
+            <span class="handle l"><i></i></span>
+            <span class="handle r"><i></i></span>
+          </div>
+          <div id="playhead" class="playhead"></div>
+        </div>
+        <div class="trim-times"><span id="tIn">0:00.0</span><b id="tLen">0.0s</b><span id="tOut">0:00.0</span></div>
+      </div>
+
+      <div id="ovPanel" class="clip-panel" hidden>
+        <div class="cp-head">
+          <b id="ovTitle">Overlay</b>
+          <div class="cp-acts">
+            <button id="ovSound" class="cp-btn">Sound off</button>
+            <button id="ovFront" class="cp-btn">To front</button>
+            <button id="ovDelete" class="cp-btn danger">Delete</button>
+            <button id="ovDone" class="cp-btn done">Done</button>
+          </div>
+        </div>
+        <p class="trim-tip">Drag it on the video to move it · pinch (or the slider) to resize · drag its bar under the clips to change when it shows, its ends to change how long.</p>
+        <div class="vol ov-size"><span>Size</span><input id="ovSize" type="range" min="10" max="100" value="55" aria-label="Overlay size"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ SHEET (clips / my videos / captions / setup) ============ -->
+  <div id="sheetBackdrop" class="backdrop" hidden></div>
+  <section id="sheet" class="sheet" aria-hidden="true">
+    <div class="sheet-head">
+      <h2 id="sheetTitle">Clips</h2>
+      <button id="closeSheet" class="link-btn">Done</button>
+    </div>
+    <div id="sheetBody" class="sheet-body"></div>
+  </section>
+
+  <!-- ============ PLAYER ============ -->
+  <div id="player" class="player" hidden>
+    <video id="playerVideo" playsinline controls></video>
+    <div class="row player-actions">
+      <button id="savePlayer" class="btn primary">Save to phone</button>
+      <button id="newReaction" class="btn ghost">New reaction</button>
+      <button id="closePlayer" class="btn ghost">Close</button>
+    </div>
+  </div>
+
+  <!-- ============ SAVING (render) ============ -->
+  <div id="renderOverlay" class="busy" hidden>
+    <div class="render-box">
+      <b>Making your video…</b>
+      <div class="bar"><i id="renderBar"></i></div>
+      <p id="renderText">0%</p>
+      <p class="render-tip">Keep this screen open. It takes about as long as the video.</p>
+      <button id="renderCancel" class="btn ghost">Cancel</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="status"></div>
+  <div id="busy" class="busy" hidden><div class="spinner"></div><p id="busyText">Working…</p></div>
+
+  <!-- kept on the page but invisible: iPhones stop updating hidden (display:none) videos -->
+  <video id="srcVideo" class="offscreen" playsinline webkit-playsinline preload="auto"></video>
+  <video id="camVideo" class="offscreen" playsinline webkit-playsinline muted autoplay></video>
+  <video id="workVideo" class="offscreen" playsinline webkit-playsinline preload="auto"></video>
+  <canvas id="renderCanvas" class="offscreen" width="1080" height="1920"></canvas>
+
+  <script src="store.js"></script>
+  <script src="captions.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
